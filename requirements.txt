@@ -1,0 +1,9 @@
+streamlit
+pandas
+requests
+plotly
+sentence-transformers
+faiss-cpu
+scikit-learn
+PyPDF2
+tqdm
