@@ -30,7 +30,8 @@ class EmbeddingIndex:
 
     def encode(self, texts: List[str]):
         embs = self.model.encode(texts, convert_to_numpy=True, show_progress_bar=False)
-        return embs
+        # Ensure dtype and contiguity for downstream libraries (faiss expects float32)
+        return np.ascontiguousarray(embs, dtype=np.float32)
 
     def build(self, texts: List[str]):
         self.texts = texts
@@ -48,8 +49,10 @@ class EmbeddingIndex:
     def query(self, text: str, top_k: int = 5) -> List[Tuple[int, float]]:
         q_emb = self.encode([text])[0]
         if _HAS_FAISS:
-            faiss.normalize_L2(np.array([q_emb]))
-            D, I = self.index.search(np.array([q_emb]), top_k)
+            # normalize the query vector in-place and search with the same array
+            q_arr = np.ascontiguousarray(np.array([q_emb], dtype=np.float32))
+            faiss.normalize_L2(q_arr)
+            D, I = self.index.search(q_arr, top_k)
             # faiss returns distances as inner product; map to similarity
             sims = D[0].tolist()
             idxs = I[0].tolist()
@@ -69,8 +72,10 @@ class EmbeddingIndex:
         if self.embeddings is None:
             return pairs
         if _HAS_FAISS:
-            faiss.normalize_L2(self.embeddings)
-            D, I = self.index.search(self.embeddings, 6)  # self-neighbors included
+            # ensure embeddings are float32 contiguous and normalized for search
+            emb_arr = np.ascontiguousarray(self.embeddings.astype(np.float32))
+            faiss.normalize_L2(emb_arr)
+            D, I = self.index.search(emb_arr, 6)  # self-neighbors included
             for i, (idxs, sims) in enumerate(zip(I, D)):
                 for idx, sim in zip(idxs[1:], sims[1:]):  # skip itself at position 0
                     if sim >= threshold:

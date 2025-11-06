@@ -14,9 +14,9 @@ OLLAMA_MODEL = "mistral"  # change if you use a different local model
 def _build_prompt(title: str, body: str) -> str:
     prompt = f"""
 You are an expert QA engineer. Analyze the GitHub issue below and return ONLY valid JSON with the keys:
-  - summary (short, one-line)
+  - summary (short, 2-line)
   - severity (Low / Medium / High)
-  - possible_cause (one short line)
+  - possible_cause (2 lines)
 Make severity conservative: if unsure, mark Medium.
 
 Issue Title: {title}
