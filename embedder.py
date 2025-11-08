@@ -8,7 +8,6 @@ If faiss isn't available, falls back to sklearn NearestNeighbors.
 from sentence_transformers import SentenceTransformer, util
 import numpy as np
 from typing import List, Tuple
-import logging
 
 # Try FAISS, fallback
 try:
