@@ -1,9 +1,6 @@
-# Streamlit dashboard (main)
-
-# app.py
+# --- Streamlit dashboard (main) ---
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 from summarizer_local import summarize_issue
 from embedder import EmbeddingIndex
 from severity_model import predict_texts, load_model
@@ -79,7 +76,9 @@ if fetch_button and selected_repo:
     final_df = pd.concat([df.reset_index(drop=True), result_df.reset_index(drop=True)], axis=1)
 
     st.subheader("📋 Summarized Issues")
-    st.dataframe(final_df, use_container_width=True)
+    cols_to_show = ["title", "summary", "severity", "possible_cause"]
+    available_cols = [c for c in cols_to_show if c in final_df.columns]
+    st.dataframe(final_df[available_cols], use_container_width=True)
 
     # --- Duplicate Detection ---
     st.markdown("---")
@@ -94,72 +93,111 @@ if fetch_button and selected_repo:
     else:
         st.info("No duplicates found above 0.78 similarity.")
 
-    # --- Severity Visualizations (advanced) ---
+    # --- Severity visual: line graph + cause origins ---
     st.markdown("---")
-    st.header("📊 Severity Dashboard")
+    st.header("📊 Severity Overview")
 
-    # Normalize fields
+    # Normalize and numeric mapping
     final_df["possible_cause"] = final_df["possible_cause"].fillna("Unknown").astype(str)
     severity_map = {"Low": 1, "Medium": 2, "High": 3}
     final_df["severity_numeric"] = final_df["severity"].map(severity_map).fillna(2)
 
-    # 1) Summary table with counts + percent
-    severity_count = final_df["severity"].value_counts(dropna=False).rename_axis("Severity").reset_index(name="Count")
-    total = severity_count["Count"].sum()
-    severity_count["Percent"] = (severity_count["Count"] / total * 100).round(1)
-    st.subheader("Severity counts & percentages")
-    st.dataframe(severity_count.sort_values(by="Count", ascending=False), width='stretch')
+    # ---- Pie Chart for Severity Levels ----
+    import matplotlib.pyplot as plt
+    import numpy as np
 
-    # 2) Pie chart (improved hover + hole)
-    fig_pie = px.pie(severity_count, names="Severity", values="Count",
-                     title="🧩 Severity Distribution", hole=0.4,
-                     hover_data=["Percent"], labels={"Percent": "Percent (%)"})
-    fig_pie.update_traces(textinfo='label+percent', hovertemplate='%{label}: %{value} issues (%{percent})')
-    st.plotly_chart(fig_pie, width='stretch')
+    # Prepare data
+    severity_counts = final_df["severity"].value_counts().reindex(["High", "Medium", "Low"], fill_value=0)
+    labels = severity_counts.index.tolist()
+    data = severity_counts.values
 
-    # 3) Top possible causes (counts)
-    cause_count = final_df["possible_cause"].value_counts().reset_index().head(12)
-    cause_count.columns = ["Possible Cause", "Frequency"]
-    fig_bar = px.bar(cause_count, x="Possible Cause", y="Frequency",
-                     title="🧠 Top Recurring Root Causes", text_auto=True)
-    fig_bar.update_layout(xaxis_tickangle=-45)
-    st.plotly_chart(fig_bar, width='stretch')
+    # Custom colors: High=Red, Medium=Orange, Low=Green
+    colors = ["#FF4C4C", "#FFA500", "#4CAF50"]  # red, orange, green
 
-    # 4) Stacked bar: top causes broken down by severity
-    top_causes = final_df["possible_cause"].value_counts().head(8).index.tolist()
-    breakdown = (final_df[final_df["possible_cause"].isin(top_causes)]
-                 .groupby(["possible_cause", "severity"]).size().reset_index(name="count"))
-    if not breakdown.empty:
-        pivot = breakdown.pivot(index="possible_cause", columns="severity", values="count").fillna(0)
-        pivot = pivot[[c for c in ["Low", "Medium", "High"] if c in pivot.columns]]
-        fig_stack = px.bar(pivot, x=pivot.index, y=pivot.columns,
-                           title="Stacked: Top Causes by Severity",
-                           labels={"value": "Count", "possible_cause": "Cause"})
-        fig_stack.update_layout(barmode='stack', xaxis_tickangle=-45)
-        st.plotly_chart(fig_stack, width='stretch')
+    # --- Function for labels (skip zeros) ---
+    def autopct_format(pct, allvalues):
+        total = np.sum(allvalues)
+        count = int(round(pct / 100.0 * total))
+        # Only show label if value > 0
+        return f"{pct:.1f}%\n({count})" if count > 0 else ""
 
-    # 5) Sunburst: severity -> cause -> count
-    sunburst_df = final_df.groupby(["severity", "possible_cause"]).size().reset_index(name="count")
-    if not sunburst_df.empty:
-        fig_sun = px.sunburst(sunburst_df, path=["severity", "possible_cause"], values="count",
-                              title="Severity → Possible Cause Breakdown")
-        st.plotly_chart(fig_sun, width='stretch')
+    # --- Plot setup ---
+    fig, ax = plt.subplots(figsize=(6, 6))
+    wedges, texts, autotexts = ax.pie(
+        data,
+        autopct=lambda pct: autopct_format(pct, data),
+        explode=(0.05, 0.05, 0.05),
+        labels=None,
+        colors=colors,
+        startangle=90,
+        wedgeprops={'linewidth': 1, 'edgecolor': 'white'},
+        textprops={'fontsize': 10, 'color': 'black'}
+    )
 
-    # 6) Trend line with smoothing (rolling average over issue index)
-    st.subheader("📈 Severity Trend (smoothed)")
-    trend_df = final_df.reset_index().rename(columns={"index": "issue_index"})
-    # ensure numeric severity exists
-    if "severity_numeric" not in trend_df:
-        trend_df["severity_numeric"] = trend_df["severity"].map(severity_map).fillna(2)
-    # rolling mean (window depends on size)
-    window = max(3, min(7, int(len(trend_df) / 4) or 3))
-    trend_df["severity_roll"] = trend_df["severity_numeric"].rolling(window=window, min_periods=1, center=True).mean()
-    fig_line = px.line(trend_df, x="issue_index", y=["severity_numeric", "severity_roll"],
-                       labels={"value": "Severity (numeric)", "issue_index": "Issue index"},
-                       title=f"Severity Trend (rolling window={window})")
-    fig_line.update_yaxes(tickvals=[1, 2, 3], ticktext=["Low", "Medium", "High"]) 
-    fig_line.update_traces(selector=dict(name='severity_numeric'), mode='markers+lines')
-    st.plotly_chart(fig_line, width='stretch')
+    # --- Equal aspect ratio ensures pie is circular ---
+    ax.axis('equal')
+
+    # --- Add legend & title ---
+    ax.legend(
+        wedges, 
+        labels, 
+        title="Severity Levels",
+        loc="center left", 
+        bbox_to_anchor=(1.25, 0, 0.5, 1),
+        fontsize=10,
+        title_fontsize=11
+    )
+
+    plt.setp(autotexts, size=10, weight="bold")
+    ax.set_title("Severity Distribution", fontsize=14, pad=20)
+
+    # --- Adjust layout to avoid cutoff ---
+    plt.tight_layout()
+
+    # --- Display in Streamlit ---
+    st.pyplot(fig)
+
+
+    # Cause-origin inference
+    st.subheader("Cause origins (one-line summary per issue)")
+
+    def infer_origins(text: str):
+
+        t = (text or "").lower()
+        tags = []
+        if any(k in t for k in ["stack", "trace", "exception", "traceback"]):
+            tags.append("Runtime/Exception")
+        if any(k in t for k in ["error", "bug", "wrong", "failed", "fail"]):
+            tags.append("Bug/Error")
+        if any(k in t for k in ["dependenc", "pip", "package", "module", "lib"]):
+            tags.append("Dependency")
+        if any(k in t for k in ["config", "env", "environment", "setting", "variable"]):
+            tags.append("Configuration/Env")
+        if any(k in t for k in ["timeout", "latency", "slow", "performance", "lag"]):
+            tags.append("Performance")
+        if any(k in t for k in ["auth", "token", "permission", "403", "401", "unauthor"]):
+            tags.append("Auth/Permissions")
+        if any(k in t for k in ["db", "database", "sql", "postgres", "mysql"]):
+            tags.append("Database")
+        if any(k in t for k in ["network", "dns", "tcp", "connection", "timeout"]):
+            tags.append("Network")
+        if any(k in t for k in ["ui", "css", "frontend", "react", "angular"]):
+            tags.append("UI/Frontend")
+        return list(dict.fromkeys(tags))[:4] or ["Unknown"]
+
+    # One-line cause summary
+    for i, row in final_df.head(30).iterrows():
+        title = (row.get("title") or "").strip()
+        desc = (row.get("description") or "").strip()
+        inferred = infer_origins(title + " \n " + desc)
+        provided = (row.get("possible_cause") or "").strip()
+        hint = f"Provided cause: {provided}." if provided and provided.lower() != "unknown" else ""
+        st.write(f"{i+1}. {title[:120]} — Causes: {', '.join(inferred)} {(' | ' + hint) if hint else ''}")
+
+    # 💡 Recommended Fixes
+    st.subheader("💡 Recommended Fixes")
+    for i, row in final_df.head(30).iterrows():
+        st.write(f"{i+1}. {row['title'][:120]} — 💡 {row.get('recommended_fix', 'N/A')}")
 
     # --- Download ---
     csv = final_df.to_csv(index=False).encode("utf-8")
